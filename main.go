@@ -6,8 +6,12 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path"
+	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh/terminal"
 
 	"github.com/google/uuid"
 	"github.com/zserge/lorca"
@@ -19,6 +23,48 @@ import (
 )
 
 const codeServerPath = "/tmp/codessh-code-server"
+
+func signals(mgr *manager) {
+	signal_chan := make(chan os.Signal, 1)
+	signal.Notify(signal_chan,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+		syscall.SIGWINCH)
+
+	go func() {
+		for s := range signal_chan {
+			switch s {
+			case syscall.SIGHUP:
+				fmt.Println("main: sighup")
+				mgr.doBroadcast(&sigMessage{signal: ssh.SIGHUP})
+			case syscall.SIGINT:
+				fmt.Println("main: sigint")
+				mgr.doBroadcast(&sigMessage{signal: ssh.SIGINT})
+			case syscall.SIGTERM:
+				fmt.Println("main: sigterm")
+				mgr.doBroadcast(&sigMessage{signal: ssh.SIGTERM})
+			case syscall.SIGQUIT:
+				fmt.Println("main: sigquit")
+				mgr.doBroadcast(&sigMessage{signal: ssh.SIGQUIT})
+			case syscall.SIGWINCH:
+				fmt.Println("main: sigwinch")
+				h, w, err := terminal.GetSize(0)
+				if err != nil {
+					panic(err)
+				}
+				mgr.doBroadcast(&resizeMessage{
+					NewHeight: h,
+					NewWidth:  w,
+				})
+			default:
+				fmt.Println("I dunno")
+			}
+		}
+
+	}()
+}
 
 func main() {
 	host := flags()
@@ -33,7 +79,7 @@ func main() {
 	sshConfig := &ssh.ClientConfig{
 		User:            login,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: KnownHostsHandler(),
 	}
 
 	connection, err := dial("tcp", addr, sshConfig)
@@ -41,24 +87,22 @@ func main() {
 		log.Fatalf("Failed to dial: %v", err)
 	}
 
-	s := &sshcode{
-		client:   connection,
-		sessions: make(map[*ssh.Session]struct{}),
-	}
+	mgr := newManager(connection)
+	go mgr.run()
 
-	fmt.Println("ensuring code-server is updated...")
-
-	cmd := fmt.Sprintf(`set -euxo pipefail || exit 1; mkdir -p ~/.local/share/code-server; cd %[1]s; /usr/bin/wget -N https://codesrv-ci.cdr.sh/latest-linux; [ -f %[2]s ] && rm %[2]s; ln latest-linux %[2]s; chmod +x %[2]s; exit 0`, path.Dir(codeServerPath), codeServerPath)
-
-	if err := s.runCommand(cmd); err != nil {
-		log.Fatal("Unable to execute script: %v", err)
-	}
+	upgrade(mgr)
 
 	rand, _ := uuid.NewRandom()
 	socketName := "/tmp/code-server." + rand.String() + ".sock"
-	go func() {
-		fmt.Println(s.runCommand(codeServerPath + " " + viper.GetString("workdir") + " --allow-http --no-auth --socket " + socketName))
-	}()
+
+	session, err := mgr.newSession("code-server")
+	if err != nil {
+		log.Fatal("Unable to create session: %v", err)
+	}
+
+	go session.run(codeServerPath + " " + viper.GetString("workdir") + " --allow-http --no-auth --socket " + socketName)
+
+	// todo, probe for service status
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -67,42 +111,34 @@ func main() {
 
 	defer listener.Close()
 
+	go launchUI(mgr, "http://"+listener.Addr().String())
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Fatal(err)
+			}
+			go forward(connection, conn, socketName)
+		}
+	}()
+
+	session.wait()
+
+	cleanup(mgr, socketName)
+}
+
+func launchUI(mgr *manager, url string) {
 	go func() {
 		time.Sleep(5 * time.Second)
-		url := "http://" + listener.Addr().String()
+
 		ui, _ := lorca.New(url, "", 480, 320)
 		defer ui.Close()
 
 		<-ui.Done()
 
-		for session := range s.sessions {
-			session.Signal(ssh.SIGHUP)
-		}
-		for len(s.sessions) > 0 {
-			fmt.Println("waiting for shutdown")
-			time.Sleep(500 * time.Millisecond)
-		}
-		s.runCommand("rm " + socketName)
-		for len(s.sessions) > 0 {
-			fmt.Println("waiting for cleanup")
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		listener.Close()
+		mgr.doBroadcast(&sigMessage{signal: ssh.SIGHUP})
 	}()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatal(err)
-		}
-		go s.forward(conn, socketName)
-	}
-}
-
-type sshcode struct {
-	client   *ssh.Client
-	sessions map[*ssh.Session]struct{}
 }
 
 func dial(network, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
@@ -124,27 +160,8 @@ func dial(network, addr string, config *ssh.ClientConfig) (*ssh.Client, error) {
 	return ssh.Dial(network, addr, config)
 }
 
-func (s *sshcode) runCommand(cmd string) error {
-	session, err := s.client.NewSession()
-	if err != nil {
-		return err
-	}
-	defer session.Close()
-	session.RequestPty(os.Getenv("TERM"), 80, 80, ssh.TerminalModes{
-		ssh.ECHO:          0,     // disable echoing
-		ssh.TTY_OP_ISPEED: 14400, // input speed = 14.4kbaud
-		ssh.TTY_OP_OSPEED: 14400, // output speed = 14.4kbaud
-	})
-	session.Stdout = os.Stdout
-	session.Stderr = os.Stderr
-	s.sessions[session] = struct{}{}
-	err = session.Run(cmd)
-	delete(s.sessions, session)
-	return err
-}
-
-func (s *sshcode) forward(localConn net.Conn, socketName string) {
-	remoteConn, err := s.client.Dial("unix", socketName)
+func forward(client *ssh.Client, localConn net.Conn, socketName string) {
+	remoteConn, err := client.Dial("unix", socketName)
 	if err != nil {
 		fmt.Printf("Remote dial error: %s\n", err)
 		return
@@ -159,4 +176,28 @@ func (s *sshcode) forward(localConn net.Conn, socketName string) {
 
 	go copyConn(localConn, remoteConn)
 	go copyConn(remoteConn, localConn)
+}
+
+func upgrade(mgr *manager) {
+	cmd := fmt.Sprintf(`set -euxo pipefail || exit 1; mkdir -p ~/.local/share/code-server; cd %[1]s; /usr/bin/wget -N https://codesrv-ci.cdr.sh/latest-linux; [ -f %[2]s ] && rm %[2]s; ln latest-linux %[2]s; chmod +x %[2]s; exit 0`, path.Dir(codeServerPath), codeServerPath)
+
+	session, err := mgr.newSession("upgrade script")
+	if err != nil {
+		log.Fatal("Unable to create session: %v", err)
+	}
+
+	if err := session.run(cmd); err != nil {
+		log.Fatal("Failed to execute upgrade script: " + err.Error())
+	}
+}
+
+func cleanup(mgr *manager, socketName string) {
+	session, err := mgr.newSession("cleanup")
+	if err != nil {
+		log.Fatal("Unable to create session: %v", err)
+	}
+
+	if err := session.run("rm " + socketName); err != nil {
+		log.Fatal("Failed to execute cleanup script: " + err.Error())
+	}
 }
