@@ -19,4 +19,5 @@ func KnownHostsHandler() ssh.HostKeyCallback {
 	// 	}
 	// 	fmt.Printf("Windows system root is %q\n", s)
 	// }
+	return ssh.InsecureIgnoreHostKey()
 }

@@ -94,7 +94,7 @@ func (s *session) run(cmd string) error {
 		s.waiting = nil
 	}()
 
-	h, w, err := terminal.GetSize(0)
+	h, w, err := terminal.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
 		s.err = err
 		return err
