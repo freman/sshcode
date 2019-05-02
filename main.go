@@ -5,73 +5,27 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
-	"os/signal"
 	"path"
-	"syscall"
 	"time"
 
-	"golang.org/x/crypto/ssh/terminal"
-
-	"github.com/google/uuid"
-	"github.com/zserge/lorca"
-
 	"github.com/freman/sshcode/authmethod"
+	"github.com/google/uuid"
 	"github.com/spf13/viper"
-
+	"github.com/zserge/lorca"
 	"golang.org/x/crypto/ssh"
 )
 
 const codeServerPath = "/tmp/codessh-code-server"
-
-func signals(mgr *manager) {
-	signal_chan := make(chan os.Signal, 1)
-	signal.Notify(signal_chan,
-		syscall.SIGHUP,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-		syscall.SIGQUIT,
-		syscall.SIGWINCH)
-
-	go func() {
-		for s := range signal_chan {
-			switch s {
-			case syscall.SIGHUP:
-				fmt.Println("main: sighup")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGHUP})
-			case syscall.SIGINT:
-				fmt.Println("main: sigint")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGINT})
-			case syscall.SIGTERM:
-				fmt.Println("main: sigterm")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGTERM})
-			case syscall.SIGQUIT:
-				fmt.Println("main: sigquit")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGQUIT})
-			case syscall.SIGWINCH:
-				fmt.Println("main: sigwinch")
-				h, w, err := terminal.GetSize(0)
-				if err != nil {
-					panic(err)
-				}
-				mgr.doBroadcast(&resizeMessage{
-					NewHeight: h,
-					NewWidth:  w,
-				})
-			default:
-				fmt.Println("I dunno")
-			}
-		}
-
-	}()
-}
 
 func main() {
 	host := flags()
 	addr := fmt.Sprintf("%s:%d", host, viper.GetInt("port"))
 	login := viper.GetString("login")
 
-	authMethods := []ssh.AuthMethod{authmethod.SSHAgent()}
+	var authMethods []ssh.AuthMethod
+	if sshAgent := authmethod.SSHAgent(); sshAgent != nil {
+		authMethods = append(authMethods, sshAgent)
+	}
 	if fileName := viper.GetString("identity"); fileName != "" {
 		authMethods = append(authMethods, authmethod.PrivateKeyFile(fileName, authmethod.PromptPassword))
 	}
@@ -97,7 +51,7 @@ func main() {
 
 	session, err := mgr.newSession("code-server")
 	if err != nil {
-		log.Fatal("Unable to create session: %v", err)
+		log.Fatalf("Unable to create session: %v", err)
 	}
 
 	go session.run(codeServerPath + " " + viper.GetString("workdir") + " --allow-http --no-auth --socket " + socketName)
@@ -183,7 +137,7 @@ func upgrade(mgr *manager) {
 
 	session, err := mgr.newSession("upgrade script")
 	if err != nil {
-		log.Fatal("Unable to create session: %v", err)
+		log.Fatalf("Unable to create session: %v", err)
 	}
 
 	if err := session.run(cmd); err != nil {
@@ -194,7 +148,7 @@ func upgrade(mgr *manager) {
 func cleanup(mgr *manager, socketName string) {
 	session, err := mgr.newSession("cleanup")
 	if err != nil {
-		log.Fatal("Unable to create session: %v", err)
+		log.Fatalf("Unable to create session: %v", err)
 	}
 
 	if err := session.run("rm " + socketName); err != nil {
