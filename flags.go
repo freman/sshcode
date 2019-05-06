@@ -18,6 +18,7 @@ func flags() (host string) {
 	pflag.StringP("identity", "i", "", "Identity file (eg: ~/.ssh/id_rsa")
 	pflag.StringP("login", "l", "", "Login username")
 	pflag.StringP("bind", "b", "", "Bind address")
+	pflag.BoolP("skiphosts", "s", false, "Skip known hosts - this is insecure")
 	pflag.IntP("port", "p", 22, "Port")
 
 	pflag.Usage = func() {
@@ -26,7 +27,7 @@ func flags() (host string) {
 	}
 
 	pflag.Parse()
-	for _, flagName := range []string{"identity", "login", "bind", "port"} {
+	for _, flagName := range []string{"identity", "login", "bind", "port", "skiphosts"} {
 		viper.BindPFlag(flagName, pflag.Lookup(flagName))
 	}
 

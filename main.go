@@ -36,6 +36,10 @@ func main() {
 		HostKeyCallback: KnownHostsHandler(),
 	}
 
+	if viper.GetBool("skiphosts") {
+		sshConfig.HostKeyCallback = ssh.InsecureIgnoreHostKey()
+	}
+
 	connection, err := dial("tcp", addr, sshConfig)
 	if err != nil {
 		log.Fatalf("Failed to dial: %v", err)
