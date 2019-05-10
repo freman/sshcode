@@ -6,5 +6,9 @@ import (
 )
 
 func KnownHostsHandler() ssh.HostKeyCallback {
-	return putty_hosts.KnownHosts()
+	cb, err := putty_hosts.KnownHosts()
+	if err != nil {
+		panic(err)
+	}
+	return cb
 }
