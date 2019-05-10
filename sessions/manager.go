@@ -49,21 +49,21 @@ func (m *Manager) Run() {
 	for {
 		select {
 		case sess := <-m.register:
-			fmt.Println("[manager] Registering " + sess.name)
+			fmt.Println("[sessions] Registering " + sess.name)
 			m.sessions[sess] = struct{}{}
 		case sess := <-m.unregister:
-			fmt.Println("[manager] Unegistering " + sess.name)
+			fmt.Println("[sessions] Unegistering " + sess.name)
 			if _, ok := m.sessions[sess]; ok {
 				delete(m.sessions, sess)
 				close(sess.messages)
 			}
 		case msg := <-m.broadcast:
-			fmt.Printf("[manager] Broadcast %T\n", msg)
+			fmt.Printf("[sessions] Broadcast %T\n", msg)
 			for sess := range m.sessions {
 				select {
 				case sess.messages <- msg:
 				default:
-					fmt.Println("[manager] Session " + sess.name + " isn't responding, nuking")
+					fmt.Println("[sessions] Session " + sess.name + " isn't responding, nuking")
 					close(sess.messages)
 					delete(m.sessions, sess)
 				}
