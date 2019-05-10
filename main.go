@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freman/sshcode/authmethod"
+	"github.com/freman/sshcode/sessions"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/zserge/lorca"
@@ -45,20 +46,20 @@ func main() {
 		log.Fatalf("Failed to dial: %v", err)
 	}
 
-	mgr := newManager(connection)
-	go mgr.run()
+	mgr := sessions.NewManager(connection)
+	go mgr.Run()
 
 	upgrade(mgr)
 
 	rand, _ := uuid.NewRandom()
 	socketName := "/tmp/code-server." + rand.String() + ".sock"
 
-	session, err := mgr.newSession("code-server")
+	session, err := mgr.NewSession("code-server")
 	if err != nil {
 		log.Fatalf("Unable to create session: %v", err)
 	}
 
-	go session.run(codeServerPath + " " + viper.GetString("workdir") + " --allow-http --no-auth --socket " + socketName)
+	go session.Run(codeServerPath + " " + viper.GetString("workdir") + " --allow-http --no-auth --socket " + socketName)
 
 	// todo, probe for service status
 
@@ -81,12 +82,11 @@ func main() {
 		}
 	}()
 
-	session.wait()
-
+	session.Wait()
 	cleanup(mgr, socketName)
 }
 
-func launchUI(mgr *manager, url string) {
+func launchUI(mgr *sessions.Manager, url string) {
 	go func() {
 		time.Sleep(5 * time.Second)
 
@@ -95,7 +95,7 @@ func launchUI(mgr *manager, url string) {
 
 		<-ui.Done()
 
-		mgr.doBroadcast(&sigMessage{signal: ssh.SIGHUP})
+		mgr.Broadcast(&sessions.SigMessage{Signal: ssh.SIGHUP})
 	}()
 }
 
@@ -136,26 +136,26 @@ func forward(client *ssh.Client, localConn net.Conn, socketName string) {
 	go copyConn(remoteConn, localConn)
 }
 
-func upgrade(mgr *manager) {
+func upgrade(mgr *sessions.Manager) {
 	cmd := fmt.Sprintf(`set -euxo pipefail || exit 1; mkdir -p ~/.local/share/code-server; cd %[1]s; /usr/bin/wget -N https://codesrv-ci.cdr.sh/latest-linux; [ -f %[2]s ] && rm %[2]s; ln latest-linux %[2]s; chmod +x %[2]s; exit 0`, path.Dir(codeServerPath), codeServerPath)
 
-	session, err := mgr.newSession("upgrade script")
+	session, err := mgr.NewSession("upgrade script")
 	if err != nil {
 		log.Fatalf("Unable to create session: %v", err)
 	}
 
-	if err := session.run(cmd); err != nil {
+	if err := session.Run(cmd); err != nil {
 		log.Fatal("Failed to execute upgrade script: " + err.Error())
 	}
 }
 
-func cleanup(mgr *manager, socketName string) {
-	session, err := mgr.newSession("cleanup")
+func cleanup(mgr *sessions.Manager, socketName string) {
+	session, err := mgr.NewSession("cleanup")
 	if err != nil {
 		log.Fatalf("Unable to create session: %v", err)
 	}
 
-	if err := session.run("rm " + socketName); err != nil {
+	if err := session.Run("rm " + socketName); err != nil {
 		log.Fatal("Failed to execute cleanup script: " + err.Error())
 	}
 }

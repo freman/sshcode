@@ -8,11 +8,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/freman/sshcode/sessions"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-func signals(mgr *manager) {
+func signals(mgr *sessions.Manager) {
 	signal_chan := make(chan os.Signal, 1)
 	signal.Notify(signal_chan,
 		syscall.SIGHUP,
@@ -26,23 +27,23 @@ func signals(mgr *manager) {
 			switch s {
 			case syscall.SIGHUP:
 				fmt.Println("main: sighup")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGHUP})
+				mgr.Broadcast(&sessions.SigMessage{Signal: ssh.SIGHUP})
 			case syscall.SIGINT:
 				fmt.Println("main: sigint")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGINT})
+				mgr.Broadcast(&sessions.SigMessage{Signal: ssh.SIGINT})
 			case syscall.SIGTERM:
 				fmt.Println("main: sigterm")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGTERM})
+				mgr.Broadcast(&sessions.SigMessage{Signal: ssh.SIGTERM})
 			case syscall.SIGQUIT:
 				fmt.Println("main: sigquit")
-				mgr.doBroadcast(&sigMessage{signal: ssh.SIGQUIT})
+				mgr.Broadcast(&sessions.SigMessage{Signal: ssh.SIGQUIT})
 			case syscall.SIGWINCH:
 				fmt.Println("main: sigwinch")
 				h, w, err := terminal.GetSize(0)
 				if err != nil {
 					panic(err)
 				}
-				mgr.doBroadcast(&resizeMessage{
+				mgr.Broadcast(&sessions.ResizeMessage{
 					NewHeight: h,
 					NewWidth:  w,
 				})
