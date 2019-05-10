@@ -10,6 +10,7 @@ import (
 
 	"github.com/freman/sshcode/authmethod"
 	"github.com/freman/sshcode/sessions"
+	"github.com/freman/sshcode/tunnels"
 	"github.com/google/uuid"
 	"github.com/spf13/viper"
 	"github.com/zserge/lorca"
@@ -50,6 +51,9 @@ func main() {
 	go mgr.Run()
 
 	upgrade(mgr)
+
+	tmgr := tunnels.NewManager(connection)
+	go tmgr.Run()
 
 	rand, _ := uuid.NewRandom()
 	socketName := "/tmp/code-server." + rand.String() + ".sock"
